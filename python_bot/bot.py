@@ -2,6 +2,8 @@ import asyncio
 import sqlite3
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
+import matplotlib.pyplot as plt
+from io import BytesIO
 
 from config import TELEGRAM_BOT_TOKEN, DB_PATH, SEND_PERIOD_SECONDS
 
@@ -17,6 +19,52 @@ def get_latest_weather():
     row = cur.fetchone()
     conn.close()
     return row
+
+
+def build_weather_plot():
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT COALESCE(created_at, source_time), temperature_c, wind_speed_ms
+        FROM weather_records
+        ORDER BY id DESC
+        LIMIT 50
+    """)
+    rows = cur.fetchall()
+    conn.close()
+
+    rows.reverse()
+
+    times = []
+    temps = []
+    winds = []
+
+    for t, temp, wind in rows:
+        ts = str(t)[:16].replace("T", " ")
+        times.append(ts)
+        temps.append(temp)
+        winds.append(wind)
+    
+    plt.figure()
+    plt.plot(times, temps, color="blue", marker="o", label="Температура (°C)")
+    plt.plot(times, winds, color="red", marker="o", label="Скорость ветра (м/с)")
+
+    plt.xlabel("Время")
+    plt.ylabel("Значение")
+    plt.title("История погоды")
+    plt.xticks(rotation=45)
+    plt.legend()
+    plt.tight_layout()
+
+    img = BytesIO()
+    plt.savefig(img, format="png", dpi=300, bbox_inches="tight")
+    plt.close()
+    img.seek(0) 
+    return img
+
+async def cmd_plot(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    img = build_weather_plot()
+    await update.message.reply_photo(photo=img, caption="График: температура (синий) и ветер (красный)")
 
 def get_all_subscribers():
     conn = sqlite3.connect(DB_PATH)
@@ -48,9 +96,7 @@ def format_weather(row):
         f"Погода: {city}\n"
         f"Температура: {temp} °C\n"
         f"Ветер: {wind} m/s\n"
-        f"Код погоды: {code}\n"
-        f"Время (API): {source_time}\n"
-        f"Записано в БД: {created_at}"
+        f"Время: {source_time}\n"
     )
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -96,7 +142,9 @@ def main():
     application.add_handler(CommandHandler("subscribe", cmd_subscribe))
     application.add_handler(CommandHandler("unsubscribe", cmd_unsubscribe))
     application.add_handler(CommandHandler("now", cmd_now))
+    application.add_handler(CommandHandler("plot", cmd_plot))
     application.run_polling()
 
 if __name__ == "__main__":
     main()
+
